@@ -1,0 +1,107 @@
+---
+title: "Regularization-TCGA"
+author: "Jesse"
+date: "23/07/2019"
+output: html_document
+---
+*Code source for set up:
+https://cran.r-project.org/web/packages/TCGA2STAT/vignettes/TCGA2STAT.html
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#these packages were taken from github on 23 July 2019
+library(splines)
+library(casebase)
+library(survival)
+library(TCGA2STAT)
+#these packages were pulled from bioconductor
+library(BiocManager)
+library(CCA)
+#library(pacman)
+#pacman::p_install_gh('sahirbhatnagar/casebase')
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install("CNTools")
+#install.packages("TCGA2STAT_1.2.tar.gz", repos = NULL, type = "source")
+```
+
+```{r}
+# Get the RNA-Seq, methylation, and mutation profiles for OV cancer patients
+seq <- getTCGA(disease="OV", data.type="RNASeq2")
+meth <- getTCGA(disease="OV", data.type="Methylation", type="27K")
+mut <- getTCGA(disease="OV", data.type="Mutation", type="all")
+
+# Now, merge the three OMICs-data into one R object
+# step 1: merge RNA-Seq and mutation data
+m1 <- OMICSBind(dat1 = seq$dat, dat2 = mut$dat)
+# step 2: further concatenate the methylation data to the merged data-object
+m2 <- OMICSBind(dat1 = m1$merged.data, dat2 = meth$dat)
+
+
+# Get the RNA-Seq V2 profiles for LUSC cancer patients
+lusc.rnaseq2 <- getTCGA(disease="LUSC", data.type="RNASeq2")
+
+# Split the OMICs data by sample types
+lusc.rnaseq2.bytype <- SampleSplit(lusc.rnaseq2$dat)
+
+
+# Get RNA-SeqV2 data for LUSC patients
+lusc.rnaseq2 <- getTCGA(disease="LUSC", data.type="RNASeq2")
+# tumor-normal matched profiles
+lusc.rnaseq2.tum.norm <- TumorNormalMatch(lusc.rnaseq2$dat)
+
+# Get data
+lusc.methyl <- getTCGA(disease="LUSC", data.type="Methylation")
+lusc.rnaseq2 <- getTCGA(disease="LUSC", data.type="RNASeq2", clinical=TRUE)
+
+ met.var <- apply(lusc.methyl$dat, 1, var)
+met.data <- subset(lusc.methyl$dat, met.var >= quantile(met.var, 0.99, na.rm=T) & !is.na(met.var))
+
+rnaseq2.var <- apply(log10(1+lusc.rnaseq2$dat), 1, var)
+rnaseq.data <- subset(log10(1+lusc.rnaseq2$dat), rnaseq2.var >= quantile(rnaseq2.var, 0.99, na.rm=T) & !is.na(rnaseq2.var))
+
+met.rnaseq2 <- OMICSBind(dat1 = rnaseq.data, dat2= met.data)
+
+# run regularized-cca
+lusc.cc <- rcc(t(met.rnaseq2$X), t(met.rnaseq2$Y), 0.75025, 0.5005)
+
+# compute the canonical loadings 
+lusc.cc2 <- comput(t(met.rnaseq2$X), t(met.rnaseq2$Y), lusc.cc)
+
+
+
+score <- lusc.cc2$xscores[,1:2]
+
+# Parameters were estimated based on visual inspection
+grp1 <- rownames(score)[(score[,1]<0 & score[,2]<0) | (score[,1]>0 & score[,2]< -1.5)]
+grp2 <- setdiff(rownames(score), grp1)
+grp <- ifelse(rownames(score) %in% grp1, 1, 2)
+
+
+
+```
+
+```{r}
+# Get survival data from the imported RNASeq2 object
+os.score <- lusc.rnaseq2$merged.dat[,1:3]
+
+# prepare the data to make sure they match the two clusters from above
+os <- os.score[,-1]
+rownames(os) <- os.score[,1]
+os <- os[rownames(lusc.cc2$xscores),]
+plotdat <- data.frame(grp, os)
+plotdat <- plotdat[order(plotdat[,1]),]
+
+```
+
+```{r}
+highDimSurvData=as.data.frame(na.omit(lusc.rnaseq2$merged.dat))
+
+highDimNames=colnames(highDimSurvData)
+
+modelSplinesregularized<- fitSmoothHazard(status~bs(OS)+.-bcr , data = highDimSurvData, ratio = 100, time ='OS')
+
+model4 <- fitSmoothHazard(status ~ ., data = ERSPC, ratio = 100)
+```
