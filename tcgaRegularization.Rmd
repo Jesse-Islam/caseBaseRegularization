@@ -97,11 +97,14 @@ plotdat <- plotdat[order(plotdat[,1]),]
 ```
 
 ```{r}
-highDimSurvData=as.data.frame(na.omit(lusc.rnaseq2$merged.dat))
+
+lusc.rnaseq2 <- getTCGA(disease="LUSC", data.type="RNASeq2", clinical=TRUE)
+highDimSurvData=na.omit(lusc.rnaseq2$merged.dat)
 
 highDimNames=colnames(highDimSurvData)
+fmla=as.formula(paste("status~ bs(OS) +",paste(highDimNames[15000:length(highDimNames)],collapse = "+")))
 
-modelSplinesregularized<- fitSmoothHazard(status~bs(OS)+.-bcr , data = highDimSurvData, ratio = 100, time ='OS')
+modelSplinesregularized<- fitSmoothHazard(fmla, data = highDimSurvData, ratio = 100, time ='OS')
 
-model4 <- fitSmoothHazard(status ~ ., data = ERSPC, ratio = 100)
+model4 <- fitSmoothHazard(DeadOfPrCa ~ ScrArm, data = ERSPC,time='Follow.Up.Time', ratio = 100)
 ```
