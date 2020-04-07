@@ -1,0 +1,160 @@
+---
+title: "BRCA-ebrcaample"
+author: "Jesse Islam"
+date: "3/17/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(casebase)
+set.seed(1)
+```
+
+```{r loadDataCalculatePCs,eval=FALSE}
+brca <- readRDS("~/gits/caseBaseRegularization/dataBRCA.Rds")[[3]]
+brca<-brca[brca$OS>0,]
+
+
+noLabelbrca<-brca[,-c(1)]
+#a<-noLabelbrca[,apply(noLabelbrca,2,function(noLabelbrca) !all(noLabelbrca==0))]
+brca<-na.omit(noLabelbrca)
+brcaPCs<-prcomp( brca ,center = TRUE,scale=FALSE)
+
+
+View(summary(brcaPCs)$importance)
+###based on importance, keep first 3 PCs
+
+pcs<-brcaPCs$x[,1:3]
+colnames(pcs)<-c("pc1","pc2","pc3")
+```
+
+
+```{r survivalGWAS,eval=FALSE}
+sGwasFunction <- function(x) {
+  fit <- casebase::fitSmoothHazard(event~ log(time)+ .-time,data=x,time="time",ratio=100,family = c("glm"))
+  # put in a check for model fitting (i.e. no problems with convergence)
+  # with 3 PCs, there should be 5 rows in my coefficient matrix:
+  #   intercept, x, pc1, pc2, pc3
+  if (length(fit$coefficients)==6) {
+    return(summary(fit)$coefficients[6,4])   # this should be the pvalue for x
+  } else {
+    return(NA) }
+  }
+
+
+
+
+pvals<-rep(NA,20501)
+
+
+for(i in 3990:20503){
+if(sum(brca[,i]==0)){
+  
+}  else{
+  
+x<-data.frame(brca[,1:2],pcs,brca[,i])
+colnames(x)<-c("event","time","pc1","pc2","pc3",colnames(brca)[i])
+pvals[i-2]=sGwasFunction(x)
+}
+}
+
+```
+
+
+```{r processingFinal}
+library(ggplot2)
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x)))
+}
+
+pvals<-readRDS(file="firstPassPvalues.Rds")
+finalData <-readRDS(file="firstPassData.Rds")
+finalData<-data.frame(lapply(finalData,normalize))
+samp<-sample(1:nrow(finalData),20)
+testSet=finalData[samp,]
+finalData=finalData[-samp,]
+
+plot(x=1:20501,y=-log(pvals), pch=19)
+abline(h=8, col="blue")
+
+#finalData<-data.frame(brca[,1:2],brcaShortList,pcs)
+  finalHazard <- casebase::fitSmoothHazard(status~ OS+ .,data=finalData,time="OS",ratio=50,family = c("glm"))
+  
+#summary(finalHazard)$coefficients[summary(finalHazard)$coefficients[,4]<0.05,]
+summary(finalHazard)
+rat=sum(summary(finalHazard)$coefficients[,4]<0.05)  /length(summary(finalHazard)$coefficients[,4]<0.05)
+
+absRiskcb <- absoluteRisk(object = finalHazard, newdata = testSet, time = unique(sort(finalData$OS)))
+res=as.data.frame(absRiskcb)
+
+data_long <- tidyr::gather(res, person, pred, c(colnames(res)[2:ncol(res)]), factor_key=TRUE)
+
+ggplot(data_long,aes(time,pred,color=person,show.legend = FALSE))+
+  geom_line(show.legend = FALSE)
+
+```
+
+
+
+of all covariates with a -log(p-val) > 8, only about `r rat`  are significant in the full model.
+
+
+```{r ANN}
+set.seed(123)
+
+library(tidyverse)
+library(neuralnet)
+library(GGally)
+
+annData<- finalHazard$data
+annData<-annData[,-c(88)]
+
+write.csv(testSet,"testData.csv", row.names = FALSE)
+
+write.csv(finalData,"originalData.csv", row.names = FALSE)
+
+write.csv(finalHazard$data,"casebaseSampledData.csv", row.names = FALSE)
+
+offsets<-finalHazard$data$offset[1]
+
+ann1 <- neuralnet(status ~ . , 
+                     data = annData, 
+                     linear.output = FALSE, 
+                     err.fct = 'ce', 
+                     likelihood = TRUE,
+                   act.fct = "logistic",
+                      lifesign="full",
+                      hidden=2)
+
+ann2 <- neuralnet(status ~ . , 
+                     data = annData, 
+                     linear.output = FALSE, 
+                     err.fct = 'ce', 
+                     likelihood = TRUE,
+                   act.fct = "logistic",
+                      lifesign="full",
+                      hidden=0)
+
+plot(ann2,rep ="best")
+#compute(ann1,testSet)
+times=(unique(sort(finalData$OS)))
+predictions=matrix(data=NA,nrow=length(times),ncol=nrow(testSet))
+
+for(i in 1 : nrow(testSet)){
+
+  dataOverTime<-normalize(testSet[rep(i, length(times)),])
+  dataOverTime$OS<-normalize(times)
+  predictions[,i]<-cumsum(exp(compute(ann2,dataOverTime)$net.result+offsets))
+
+  }
+
+res=data.frame(times=times, predictions)
+
+data_long <- tidyr::gather(res, person, pred, c(colnames(res)[2:ncol(res)]), factor_key=TRUE)
+
+ggplot(data_long,aes(times,pred,color=person,show.legend = FALSE))+
+  geom_line(show.legend = FALSE)
+
+```
+

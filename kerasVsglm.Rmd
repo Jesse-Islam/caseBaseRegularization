@@ -1,0 +1,104 @@
+---
+title: "usingKeras.Rmd"
+author: "Jesse Islam"
+date: "4/1/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+I am following this tutorial:
+https://blog.rstudio.com/2017/09/05/keras-for-r/
+
+
+## prep data
+
+```{r prepData}
+#devtools::install_github("rstudio/keras")
+
+
+#install_keras()
+library(keras)
+library(deepviz)
+library(magrittr)
+
+library(readr)
+annData <- read_csv("casebaseSampledData.csv")
+finalData <- read_csv("originalData.csv")
+offsets<-annData$offset[1]
+x_train<-as.matrix(annData[,-c(1,88)])
+y_train<-as.matrix(annData[,c(1)])
+
+set.seed(1)
+samp<-sample(1:nrow(finalData),200)
+testSet=read_csv("testData.csv")
+x_test<-as.matrix(testSet[,-c(1)])
+y_test<-as.matrix(testSet[,c(1)])
+
+```
+
+```{r simpleModel}
+# create model
+model <- keras_model_sequential()
+
+# define and compile the model
+model %>% 
+  layer_dense(units=20, input_shape = c(86),kernel_regularizer=regularizer_l1_l2(l1 = 0.01, l2 = 0.01)) %>%
+  
+  layer_dense(units = 1, activation = 'sigmoid') %>%
+  compile(
+    loss = 'binary_crossentropy',
+    optimizer = 'sgd',
+    metrics = c('binary_accuracy')
+  )
+# train 
+model %>% fit(x_train, y_train, epochs = 20, batch_size = 128)
+
+# evaluate
+
+
+score = model %>% evaluate(x_test, y_test, batch_size=128)
+a=model%>% predict_proba(x_test)
+annPreds<-exp(log(a/(1-a))+offsets)
+
+```
+
+$sigmoid(Wx+b)=p$ where p is probability when y=1.
+to get log odds 
+
+$log(odds)=log(\frac{p}{1-p})$
+
+to get hazard:
+
+$e^{(log(odds)+casebaseOffset)}=hazard$
+
+
+
+
+```{r glmfit}
+glmodel<-glm(status~.,data=annData[,-c(88)],family=binomial())
+g=predict(glmodel,newdata=as.data.frame(x_test))
+glmPreds<-exp(g+offsets)
+
+a=data.frame(glm=glmPreds,ann=drop(annPreds),events=y_test,times=x_test[,1])
+
+
+
+plot(x=1:20,y=glmPreds,col="blue",type="l",xlab="individuals",ylab="Hazard at time of dead or live",lwd=1, main="BLUE IS log. regression, BLACK is (simple) NN")
+lines(x=1:20,y=annPreds,type="l",lwd=2)
+
+
+write.csv(glmPreds,"glmHazardPredictions.csv", row.names = FALSE)
+
+
+
+```
+
+
+```{r plot}
+
+
+```
